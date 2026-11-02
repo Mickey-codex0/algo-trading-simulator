@@ -5,10 +5,14 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-# Enable CORS for Next.js frontend
+# Enable CORS for Next.js frontend (including your live Vercel deployment)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://algo-trading-simulator-seven.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,7 +92,6 @@ def update_bot_config(config: BotConfigModel):
 async def autonomous_trading_loop():
     global bot_status
     while bot_status == "RUNNING":
-        # Use dynamic configurable parameters
         asset = bot_config["target_asset"]
         qty = bot_config["quantity"]
         interval = bot_config["frequency_seconds"]
