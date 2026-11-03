@@ -40,6 +40,7 @@ export default function Home() {
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Independent local session states per browser tab/user
   const [balance, setBalance] = useState<number>(100000);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [botStatus, setBotStatus] = useState<string>("STOPPED");
@@ -51,31 +52,14 @@ export default function Home() {
   const [botQty, setBotQty] = useState<string>("0.05");
   const [botInterval, setBotInterval] = useState<string>("10");
 
-  const fetchPortfolio = () => {
-    fetch(`${API_BASE}/portfolio`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.balance !== undefined) setBalance(data.balance);
-        if (data.trades) setTrades(data.trades);
-        if (data.bot_status) setBotStatus(data.bot_status);
-        if (data.bot_config) {
-          setBotAsset(data.bot_config.target_asset);
-          setBotQty(data.bot_config.quantity.toString());
-          setBotInterval(data.bot_config.frequency_seconds.toString());
-        }
-      })
-      .catch((err) => console.error("Error fetching portfolio:", err));
-  };
-
   useEffect(() => {
+    // Check backend connection status
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
       .then((data) => setBackendStatus(data.message || "Running"))
       .catch(() => setBackendStatus("Backend Offline"));
 
-    fetchPortfolio();
-    const interval = setInterval(fetchPortfolio, 5000);
-
+    // Fetch crypto market prices from CoinGecko
     fetch(
       "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,cardano&order=market_cap_desc"
     )
@@ -100,8 +84,6 @@ export default function Home() {
         console.error("Error fetching prices:", err);
         setLoading(false);
       });
-
-    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -119,63 +101,43 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  const handleTrade = async (action: "BUY" | "SELL") => {
+  // Handle local simulation trades so each user/device is independent
+  const handleTrade = (action: "BUY" | "SELL") => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (!coin) return;
     const amt = parseFloat(tradeAmount);
     if (isNaN(amt) || amt <= 0) return;
 
-    try {
-      const res = await fetch(`${API_BASE}/trade`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          asset: coin.name,
-          action: action,
-          amount: amt,
-          price: coin.current_price,
-        }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        alert(data.error);
+    const totalCost = amt * coin.current_price;
+
+    if (action === "BUY") {
+      if (balance < totalCost) {
+        alert("Insufficient funds in your virtual portfolio!");
         return;
       }
-      if (data.portfolio) {
-        setBalance(data.portfolio.balance);
-        setTrades(data.portfolio.trades);
-      }
-    } catch (err) {
-      console.error("Trade failed:", err);
+      setBalance((prev) => prev - totalCost);
+    } else {
+      setBalance((prev) => prev + totalCost);
     }
+
+    const newTrade: Trade = {
+      id: Date.now(),
+      asset: coin.name,
+      action: action,
+      amount: amt,
+      price: coin.current_price,
+      total: totalCost,
+    };
+
+    setTrades((prev) => [newTrade, ...prev]);
   };
 
-  const toggleBot = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/bot/toggle`, { method: "POST" });
-      const data = await res.json();
-      if (data.bot_status) setBotStatus(data.bot_status);
-    } catch (err) {
-      console.error("Bot toggle failed:", err);
-    }
+  const toggleBot = () => {
+    setBotStatus((prev) => (prev === "STOPPED" ? "RUNNING" : "STOPPED"));
   };
 
-  const saveBotConfig = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/bot/config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          target_asset: botAsset,
-          quantity: parseFloat(botQty),
-          frequency_seconds: parseInt(botInterval),
-        }),
-      });
-      const data = await res.json();
-      alert(data.message || "Config saved");
-    } catch (err) {
-      console.error("Failed to save bot configuration:", err);
-    }
+  const saveBotConfig = () => {
+    alert("Bot strategy parameters saved locally!");
   };
 
   const currentCoinObj = tickers.find((c) => c.id === selectedCoin);
@@ -201,7 +163,7 @@ export default function Home() {
           <p className="text-2xl font-bold text-white mt-1">
             ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </p>
-          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">Synced with Python Backend</span>
+          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">Independent Session</span>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
@@ -277,7 +239,7 @@ export default function Home() {
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
           <h3 className="text-slate-400 text-sm font-medium">Total Trades Executed</h3>
           <p className="text-2xl font-bold text-white mt-1">{trades.length}</p>
-          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Backend logged</span>
+          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Logged in session</span>
         </div>
       </div>
 
@@ -400,7 +362,7 @@ export default function Home() {
 
       {/* Trade History */}
       <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
-        <h2 className="text-lg font-semibold mb-4">Python Backend Trade History</h2>
+        <h2 className="text-lg font-semibold mb-4">Trade History</h2>
         {trades.length === 0 ? (
           <p className="text-slate-500 text-sm">No trades logged yet.</p>
         ) : (
