@@ -55,9 +55,9 @@ export default function Home() {
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
       .then((data) => {
-        setBalance(data.balance);
-        setTrades(data.trades);
-        setBotStatus(data.bot_status);
+        if (data.balance !== undefined) setBalance(data.balance);
+        if (data.trades) setTrades(data.trades);
+        if (data.bot_status) setBotStatus(data.bot_status);
         if (data.bot_config) {
           setBotAsset(data.bot_config.target_asset);
           setBotQty(data.bot_config.quantity.toString());
@@ -70,7 +70,7 @@ export default function Home() {
   useEffect(() => {
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
-      .then((data) => setBackendStatus(data.message))
+      .then((data) => setBackendStatus(data.message || "Running"))
       .catch(() => setBackendStatus("Backend Offline"));
 
     fetchPortfolio();
@@ -141,8 +141,10 @@ export default function Home() {
         alert(data.error);
         return;
       }
-      setBalance(data.portfolio.balance);
-      setTrades(data.portfolio.trades);
+      if (data.portfolio) {
+        setBalance(data.portfolio.balance);
+        setTrades(data.portfolio.trades);
+      }
     } catch (err) {
       console.error("Trade failed:", err);
     }
@@ -152,7 +154,7 @@ export default function Home() {
     try {
       const res = await fetch(`${API_BASE}/bot/toggle`, { method: "POST" });
       const data = await res.json();
-      setBotStatus(data.bot_status);
+      if (data.bot_status) setBotStatus(data.bot_status);
     } catch (err) {
       console.error("Bot toggle failed:", err);
     }
@@ -170,7 +172,7 @@ export default function Home() {
         }),
       });
       const data = await res.json();
-      alert(data.message);
+      alert(data.message || "Config saved");
     } catch (err) {
       console.error("Failed to save bot configuration:", err);
     }
@@ -187,8 +189,8 @@ export default function Home() {
           <span className="text-xl font-bold tracking-tight">Algo Trading Simulator</span>
         </div>
         <div className="flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 text-sm">
-          <span className={`h-2.5 w-2.5 rounded-full ${backendStatus.includes("Running") ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
-          <span className="text-slate-300 font-medium">{backendStatus}</span>
+          <span className={`h-2.5 w-2.5 rounded-full ${backendStatus?.includes("Running") ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
+          <span className="text-slate-300 font-medium">{backendStatus || "Connecting..."}</span>
         </div>
       </nav>
 
