@@ -11,6 +11,8 @@ import {
   CartesianGrid,
 } from "recharts";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "https://algo-trading-simulator-88ie.onrender.com";
+
 interface CryptoTicker {
   id: string;
   symbol: string;
@@ -45,13 +47,12 @@ export default function Home() {
   const [tradeAmount, setTradeAmount] = useState<string>("1");
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
 
-  // Bot Config State
   const [botAsset, setBotAsset] = useState<string>("Bitcoin");
   const [botQty, setBotQty] = useState<string>("0.05");
   const [botInterval, setBotInterval] = useState<string>("10");
 
   const fetchPortfolio = () => {
-    fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio")
+    fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
       .then((data) => {
         setBalance(data.balance);
@@ -67,7 +68,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio")
+    fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
       .then((data) => setBackendStatus(data.message))
       .catch(() => setBackendStatus("Backend Offline"));
@@ -125,7 +126,7 @@ export default function Home() {
     if (isNaN(amt) || amt <= 0) return;
 
     try {
-      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), {
+      const res = await fetch(`${API_BASE}/trade`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -149,7 +150,7 @@ export default function Home() {
 
   const toggleBot = async () => {
     try {
-      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), { method: "POST" });
+      const res = await fetch(`${API_BASE}/bot/toggle`, { method: "POST" });
       const data = await res.json();
       setBotStatus(data.bot_status);
     } catch (err) {
@@ -159,7 +160,7 @@ export default function Home() {
 
   const saveBotConfig = async () => {
     try {
-      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), {
+      const res = await fetch(`${API_BASE}/bot/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -186,7 +187,7 @@ export default function Home() {
           <span className="text-xl font-bold tracking-tight">Algo Trading Simulator</span>
         </div>
         <div className="flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 text-sm">
-          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span className={`h-2.5 w-2.5 rounded-full ${backendStatus.includes("Running") ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
           <span className="text-slate-300 font-medium">{backendStatus}</span>
         </div>
       </nav>
@@ -195,7 +196,9 @@ export default function Home() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 w-full">
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
           <h3 className="text-slate-400 text-sm font-medium">Portfolio Cash Balance</h3>
-          <p className="text-2xl font-bold text-white mt-1">${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          <p className="text-2xl font-bold text-white mt-1">
+            ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+          </p>
           <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">Synced with Python Backend</span>
         </div>
 
@@ -263,7 +266,7 @@ export default function Home() {
           </div>
           <button
             onClick={saveBotConfig}
-            className="mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 rounded-lg text-xs font-semibold transition-colors border border-slate-700"
+            className="mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 rounded-lg text-xs font-semibold transition-colors"
           >
             Save Parameters
           </button>
@@ -278,13 +281,19 @@ export default function Home() {
 
       {/* Chart & Order Simulator Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
-        <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg flex flex-col justify-between">
+        <div className="bg-slate-900/80 border border-slate-800 p-6 shadow-lg rounded-xl flex flex-col justify-between lg:col-span-2">
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h2 className="text-lg font-semibold">{currentCoinObj ? `${currentCoinObj.name} Price Trend` : "Price Chart"}</h2>
-              <p className="text-xs text-slate-400 font-mono">{currentCoinObj ? `$${currentCoinObj.current_price.toLocaleString()} USD` : ""}</p>
+              <h2 className="text-lg font-semibold">
+                {currentCoinObj ? `${currentCoinObj.name} Price Trend` : "Price Chart"}
+              </h2>
+              <p className="text-xs text-slate-400 font-mono">
+                {currentCoinObj ? `$${currentCoinObj.current_price.toLocaleString()} USD` : ""}
+              </p>
             </div>
-            <div className="text-xs bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-emerald-400 font-mono">LIVE FEED</div>
+            <div className="text-xs bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-emerald-400 font-mono">
+              LIVE FEED
+            </div>
           </div>
           <div className="h-64 w-full mt-2">
             <ResponsiveContainer width="100%" height="100%">
@@ -298,7 +307,7 @@ export default function Home() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 12 }} />
                 <YAxis stroke="#64748b" domain={["auto", "auto"]} tick={{ fontSize: 12 }} />
-                <Tooltip contentStyle={{ backgroundColor: "#020617", borderColor: "#1e293b", borderRadius: "8px", fontSize: "12px" }} itemStyle={{ color: "#34d399" }} />
+                <Tooltip contentStyle={{ backgroundColor: "#020617", borderColor: "#1e293b", borderRadius: "8px", fontSize: "12px" }} />
                 <Area type="monotone" dataKey="price" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
               </AreaChart>
             </ResponsiveContainer>
@@ -306,7 +315,7 @@ export default function Home() {
         </div>
 
         {/* Order Simulator */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg flex flex-col justify-between">
+        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-semibold mb-4">Order Simulator</h2>
             <div className="space-y-4">
@@ -337,14 +346,18 @@ export default function Home() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 mt-6">
-            <button onClick={() => handleTrade("BUY")} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg text-sm">Buy / Long</button>
-            <button onClick={() => handleTrade("SELL")} className="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-lg text-sm">Sell / Short</button>
+            <button onClick={() => handleTrade("BUY")} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg">
+              Buy / Long
+            </button>
+            <button onClick={() => handleTrade("SELL")} className="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-lg">
+              Sell / Short
+            </button>
           </div>
         </div>
       </div>
 
       {/* Market Watch Table */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg w-full">
+      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
         <h2 className="text-lg font-semibold mb-4">Market Watch</h2>
         {loading ? (
           <p className="text-slate-400 text-sm">Loading market prices...</p>
@@ -372,7 +385,7 @@ export default function Home() {
                       <td className="py-3 px-4 text-slate-400 uppercase font-mono">{coin.symbol}</td>
                       <td className="py-3 px-4 font-mono font-medium">${coin.current_price.toLocaleString()}</td>
                       <td className={`py-3 px-4 font-semibold font-mono ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
-                        {isPositive ? "+" : ""}{coin.price_change_percentage_24h?.toFixed(2)}%
+                        {isPositive ? "+" : ""}{coin.price_change_percentage_24h.toFixed(2)}%
                       </td>
                     </tr>
                   );
@@ -384,7 +397,7 @@ export default function Home() {
       </div>
 
       {/* Trade History */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-lg w-full">
+      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
         <h2 className="text-lg font-semibold mb-4">Python Backend Trade History</h2>
         {trades.length === 0 ? (
           <p className="text-slate-500 text-sm">No trades logged yet.</p>
