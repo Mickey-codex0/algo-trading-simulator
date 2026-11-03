@@ -51,7 +51,7 @@ export default function Home() {
   const [botInterval, setBotInterval] = useState<string>("10");
 
   const fetchPortfolio = () => {
-    fetch("http://127.0.0.1:8000/portfolio")
+    fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio")
       .then((res) => res.json())
       .then((data) => {
         setBalance(data.balance);
@@ -67,7 +67,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/")
+    fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio")
       .then((res) => res.json())
       .then((data) => setBackendStatus(data.message))
       .catch(() => setBackendStatus("Backend Offline"));
@@ -125,7 +125,7 @@ export default function Home() {
     if (isNaN(amt) || amt <= 0) return;
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/trade", {
+      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -149,7 +149,7 @@ export default function Home() {
 
   const toggleBot = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/bot/toggle", { method: "POST" });
+      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), { method: "POST" });
       const data = await res.json();
       setBotStatus(data.bot_status);
     } catch (err) {
@@ -159,7 +159,7 @@ export default function Home() {
 
   const saveBotConfig = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/bot/config", {
+      const res = await fetch("https://algo-trading-simulator-88ie.onrender.com/portfolio"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
