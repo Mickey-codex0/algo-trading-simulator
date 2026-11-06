@@ -11,8 +11,6 @@ import {
   CartesianGrid,
 } from "recharts";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "https://algo-trading-simulator-88ie.onrender.com";
-
 interface CryptoTicker {
   id: string;
   symbol: string;
@@ -34,22 +32,23 @@ interface TradingSession {
   id: number;
   name: string;
   balance: number;
+  trades: Trade[];
   created_at: string;
 }
 
 export default function Home() {
-  const [backendStatus, setBackendStatus] = useState("Connecting...");
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // User & Sessions State
-  const [user, setUser] = useState<{ id: number; email: string } | null>(null);
+  // User & Sessions State (Handled Locally & Securely in Browser)
+  const [user, setUser] = useState<{ email: string } | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authPass, setAuthPass] = useState("");
+  
   const [sessions, setSessions] = useState<TradingSession[]>([]);
-  const [currentSession, setCurrentSession] = useState<TradingSession | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
 
-  // Session Specific States
+  // Active Session Specific States
   const [balance, setBalance] = useState<number>(100000);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [botStatus, setBotStatus] = useState<string>("STOPPED");
@@ -95,13 +94,8 @@ export default function Home() {
     return () => window.removeEventListener("mousemove", handleMouseMove);
   }, []);
 
-  // Fetch initial market data
+  // Fetch initial market data from CoinGecko
   useEffect(() => {
-    fetch(`${API_BASE}/portfolio`)
-      .then((res) => res.json())
-      .then((data) => setBackendStatus(data.message || "Running"))
-      .catch(() => setBackendStatus("Backend Offline"));
-
     fetch(
       "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,cardano&order=market_cap_desc"
     )
@@ -142,86 +136,99 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  // Auth Handler with error handling
-  const handleAuth = async (e: React.FormEvent) => {
+  // Auth Handler
+  const handleAuth = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail, password: authPass }),
-      });
-      if (!res.ok) {
-        const errData = await res.json();
-        alert(errData.detail || "Authentication failed");
-        return;
-      }
-      const data = await res.json();
-      setUser(data);
-      fetchSessions(data.user_id);
-    } catch {
-      alert("Unable to connect to backend server for authentication.");
+    if (!authEmail) return;
+    setUser({ email: authEmail });
+    
+    // Initialize first default session
+    const initialSession: TradingSession = {
+      id: Date.now(),
+      name: "Session 1 (Default)",
+      balance: 100000,
+      trades: [],
+      created_at: new Date().toLocaleTimeString(),
+    };
+    setSessions([initialSession]);
+    setCurrentSessionId(initialSession.id);
+    setBalance(100000);
+    setTrades([]);
+  };
+
+  // Create New Session & Archive Previous
+  const createNewSession = () => {
+    // Save current session state first before switching
+    if (currentSessionId !== null) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === currentSessionId ? { ...s, balance, trades } : s))
+      );
+    }
+
+    const newSessionId = Date.now();
+    const newName = `Session ${sessions.length + 1} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    
+    const newSess: TradingSession = {
+      id: newSessionId,
+      name: newName,
+      balance: 100000,
+      trades: [],
+      created_at: new Date().toLocaleTimeString(),
+    };
+
+    setSessions((prev) => [newSess, ...prev]);
+    setCurrentSessionId(newSessionId);
+    setBalance(100000);
+    setTrades([]);
+    setBotStatus("STOPPED");
+  };
+
+  // Switch between archived sessions
+  const handleSessionSwitch = (sessionId: number) => {
+    // Save current state first
+    if (currentSessionId !== null) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === currentSessionId ? { ...s, balance, trades } : s))
+      );
+    }
+
+    const target = sessions.find((s) => s.id === sessionId);
+    if (target) {
+      setCurrentSessionId(target.id);
+      setBalance(target.balance);
+      setTrades(target.trades);
+      setBotStatus("STOPPED");
     }
   };
 
-  const fetchSessions = async (userId: number) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/sessions/${userId}`);
-      const data = await res.json();
-      setSessions(data);
-      if (data.length > 0) {
-        setCurrentSession(data[0]);
-        setBalance(data[0].balance);
-      }
-    } catch (e) {
-      console.error(e);
+  // Sync state changes back to the active session object
+  useEffect(() => {
+    if (currentSessionId !== null) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === currentSessionId ? { ...s, balance, trades } : s))
+      );
     }
-  };
+  }, [balance, trades]);
 
-  const createNewSession = async () => {
-    if (!user) return;
-    const name = `Session ${sessions.length + 1} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
-    try {
-      const res = await fetch(`${API_BASE}/api/sessions/new`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: user.id, session_name: name }),
-      });
-      const newSess = await res.json();
-      setSessions((prev) => [newSess, ...prev]);
-      setCurrentSession(newSess);
-      setBalance(100000);
-      setTrades([]);
-    } catch {
-      alert("Failed to create new session on server.");
-    }
-  };
-
-  // Fetch AI Beginner Academy & Tactics
-  const loadAiTactics = async () => {
+  // AI Beginner Academy Advisor
+  const loadAiTactics = () => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (!coin) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/ai-advisor?asset=${coin.name}&price=${coin.current_price}&change_24h=${coin.price_change_percentage_24h}`);
-      const data = await res.json();
-      setAiTactics(data);
-      setShowTacticsModal(true);
-    } catch {
-      setAiTactics({
-        asset: coin.name,
-        price: `$${coin.current_price.toLocaleString()}`,
-        trend_summary: `${coin.name} 24h Change: ${coin.price_change_percentage_24h.toFixed(2)}%`,
-        beginner_explanation: "Trading is about analyzing risk. When prices drop, smart beginners accumulate steadily using DCA (Dollar-Cost Averaging) rather than panic selling.",
-        recommended_tactics: [
-          { name: "Dollar-Cost Averaging", explanation: "Spread your purchases over time to avoid buying at the absolute peak.", action: "Recommended for beginners" },
-          { name: "Buy the Dip", explanation: "Take advantage of red markets to accumulate assets at a discount.", action: "Use during pullbacks" }
-        ]
-      });
-      setShowTacticsModal(true);
-    }
+    
+    setAiTactics({
+      asset: coin.name,
+      price: `$${coin.current_price.toLocaleString()}`,
+      trend_summary: `${coin.name} 24h Change: ${coin.price_change_percentage_24h.toFixed(2)}%`,
+      beginner_explanation: "Trading is about analyzing market risk. When prices drop (red market), smart beginners accumulate steadily using DCA (Dollar-Cost Averaging) rather than panic selling.",
+      recommended_tactics: [
+        { name: "Dollar-Cost Averaging", explanation: "Spread your purchases over time to avoid buying at the absolute peak.", action: "Recommended for beginners" },
+        { name: "Buy the Dip", explanation: "Take advantage of red markets to accumulate assets at a discount.", action: "Use during pullbacks" }
+      ]
+    });
+    setShowTacticsModal(true);
   };
 
-  // SMART BOT EXECUTION LOOP WITH RATIONALE NOTES
+  // SMART BOT EXECUTION LOOP
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
@@ -331,6 +338,7 @@ export default function Home() {
   };
 
   const currentCoinObj = tickers.find((c) => c.id === selectedCoin);
+  const activeSessionObj = sessions.find((s) => s.id === currentSessionId);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 space-y-6 relative select-none">
@@ -346,7 +354,7 @@ export default function Home() {
           <form onSubmit={handleAuth} className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md w-full space-y-4 shadow-2xl">
             <div className="text-center space-y-1">
               <h2 className="text-2xl font-bold text-white">Welcome Trader</h2>
-              <p className="text-slate-400 text-xs">Sign in or create an account to store and browse past sessions securely</p>
+              <p className="text-slate-400 text-xs">Sign in to start your secure trading simulator sessions</p>
             </div>
             <div>
               <label className="text-xs text-slate-400 block mb-1">Email Address</label>
@@ -371,7 +379,7 @@ export default function Home() {
               />
             </div>
             <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition-all hover:scale-105 cursor-pointer">
-              Secure Sign In / Sign Up
+              Start Trading Simulator
             </button>
           </form>
         </div>
@@ -405,19 +413,13 @@ export default function Home() {
         <div className="flex items-center space-x-3">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Session:</span>
           <select
-            value={currentSession?.id || ""}
-            onChange={(e) => {
-              const selected = sessions.find((s) => s.id === parseInt(e.target.value));
-              if (selected) {
-                setCurrentSession(selected);
-                setBalance(selected.balance);
-              }
-            }}
+            value={currentSessionId || ""}
+            onChange={(e) => handleSessionSwitch(Number(e.target.value))}
             className="bg-slate-950 border border-slate-800 text-xs font-medium text-emerald-400 px-3 py-1.5 rounded-lg focus:outline-none cursor-pointer"
           >
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name} (${s.balance.toLocaleString()})
+                {s.name} (${s.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}) - {s.trades.length} trades
               </option>
             ))}
           </select>
@@ -439,7 +441,7 @@ export default function Home() {
             ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </p>
           <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">
-            {currentSession ? currentSession.name : "Active Session"}
+            {activeSessionObj ? activeSessionObj.name : "Active Session"}
           </span>
         </div>
 
