@@ -101,6 +101,49 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
+  // Automated Bot Execution Loop
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (botStatus === "RUNNING") {
+      const intervalSeconds = parseInt(botInterval) || 10;
+      
+      intervalId = setInterval(() => {
+        const coin = tickers.find((c) => c.name === botAsset);
+        if (!coin) return;
+
+        const amt = parseFloat(botQty);
+        if (isNaN(amt) || amt <= 0) return;
+
+        const totalCost = amt * coin.current_price;
+
+        setBalance((prev) => {
+          if (prev < totalCost) {
+            console.log("Bot stopped: Insufficient funds");
+            setBotStatus("STOPPED");
+            return prev;
+          }
+          return prev - totalCost;
+        });
+
+        const autoTrade: Trade = {
+          id: Date.now(),
+          asset: coin.name,
+          action: "BUY (BOT)",
+          amount: amt,
+          price: coin.current_price,
+          total: totalCost,
+        };
+
+        setTrades((prev) => [autoTrade, ...prev]);
+      }, intervalSeconds * 1000);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [botStatus, botInterval, botAsset, botQty, tickers]);
+
   // Handle local simulation trades so each user/device is independent
   const handleTrade = (action: "BUY" | "SELL") => {
     const coin = tickers.find((c) => c.id === selectedCoin);
