@@ -30,9 +30,11 @@ interface Trade {
   total: number;
 }
 
-interface ChartDataPoint {
-  time: string;
-  price: number;
+interface TradingSession {
+  id: number;
+  name: string;
+  balance: number;
+  created_at: string;
 }
 
 export default function Home() {
@@ -40,31 +42,34 @@ export default function Home() {
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Independent local session states
+  // User & Sessions State
+  const [user, setUser] = useState<{ id: number; email: string } | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [sessions, setSessions] = useState<TradingSession[]>([]);
+  const [currentSession, setCurrentSession] = useState<TradingSession | null>(null);
+
+  // Session Specific States
   const [balance, setBalance] = useState<number>(100000);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [botStatus, setBotStatus] = useState<string>("STOPPED");
   const [selectedCoin, setSelectedCoin] = useState<string>("bitcoin");
   const [tradeAmount, setTradeAmount] = useState<string>("1");
-  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+  const [chartData, setChartData] = useState<any[]>([]);
 
+  // Bot & Strategy Config State
   const [botAsset, setBotAsset] = useState<string>("bitcoin");
   const [botQty, setBotQty] = useState<string>("0.05");
   const [botInterval, setBotInterval] = useState<string>("5");
+  const [botStrategy, setBotStrategy] = useState<string>("AGGRESSIVE_BUY");
+  const [botLogs, setBotLogs] = useState<string[]>([]);
+  const [aiTactics, setAiTactics] = useState<any>(null);
+  const [showTacticsModal, setShowTacticsModal] = useState(false);
 
-  // Custom Cursor state for hover/click interactive feel
+  // Custom Cursor
   const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });
-  const [isHovering, setIsHovering] = useState(false);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      setCursorPos({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, []);
-
-  // Use REFS for reliable timer access
+  // REFS for live loop access without closures
   const tickersRef = useRef(tickers);
   tickersRef.current = tickers;
 
@@ -77,6 +82,18 @@ export default function Home() {
   const balanceRef = useRef(balance);
   balanceRef.current = balance;
 
+  const botStrategyRef = useRef(botStrategy);
+  botStrategyRef.current = botStrategy;
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setCursorPos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => window.removeEventListener("mousemove", handleMouseMove);
+  }, []);
+
+  // Fetch initial market price data
   useEffect(() => {
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
@@ -91,6 +108,7 @@ export default function Home() {
         setTickers(data);
         if (data.length > 0) {
           setSelectedCoin(data[0].id);
+          setBotAsset(data[0].id);
           const p = data[0].current_price;
           setChartData([
             { time: "10m ago", price: p * 0.99 },
@@ -103,12 +121,10 @@ export default function Home() {
         }
         setLoading(false);
       })
-      .catch((err) => {
-        console.error("Error fetching prices:", err);
-        setLoading(false);
-      });
+      .catch(() => setLoading(false));
   }, []);
 
+  // Chart update on coin selection
   useEffect(() => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (coin) {
@@ -124,13 +140,15 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  // SMART BOT LOOP: Evaluates market conditions and alternates Buy/Sell dynamically
+  // SMART BOT EXECUTION LOOP WITH STRATEGY SELECTOR & NOTES
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
     if (botStatus === "RUNNING") {
-      const intervalSeconds = parseInt(botInterval) || 5;
-      console.log(`[Smart Bot] Activated on asset: ${botAsset} every ${intervalSeconds}s`);
+      const intervalSec = parseInt(botInterval) || 5;
+      const strategyName = botStrategyRef.current;
+      const logMsg = `[Bot Started] Mode: ${strategyName} on asset ${botAssetRef.current} every ${intervalSec}s`;
+      setBotLogs((prev) => [logMsg, ...prev.slice(0, 15)]);
 
       intervalId = setInterval(() => {
         const currentTickers = tickersRef.current;
@@ -138,28 +156,52 @@ export default function Home() {
         const coin = currentTickers.find((c) => c.id === targetId);
 
         if (!coin) {
-          console.warn("[Smart Bot] Asset not found:", targetId);
+          setBotLogs((prev) => [`[Error] Asset ID '${targetId}' not found in market feed.`, ...prev.slice(0, 15)]);
           return;
         }
 
         const amt = parseFloat(botQtyRef.current);
-        if (isNaN(amt) || amt <= 0) return;
+        if (isNaN(amt) || amt <= 0) {
+          setBotLogs((prev) => [`[Error] Invalid bot quantity.`, ...prev.slice(0, 15)]);
+          return;
+        }
 
         const totalCost = amt * coin.current_price;
+        const currentStrategy = botStrategyRef.current;
+        let actionType = "BUY (BOT)";
+        let reasoningNote = "";
 
-        // Smart Strategy Logic: 
-        // If 24h change is positive, trend is bullish -> BUY. If negative -> SELL to take profit/cut losses.
-        const isBullish = coin.price_change_percentage_24h >= 0;
-        const actionType = isBullish ? "BUY (SMART BOT)" : "SELL (SMART BOT)";
+        // Determine action based on user's selected strategy
+        if (currentStrategy === "AGGRESSIVE_BUY") {
+          actionType = "BUY (AGGRESSIVE)";
+          reasoningNote = `Note: Aggressive mode active. Buying regardless of market drop (${coin.price_change_percentage_24h.toFixed(2)}%).`;
+        } else if (currentStrategy === "BUY_THE_DIP") {
+          if (coin.price_change_percentage_24h < 0) {
+            actionType = "BUY (DIP ACCUMULATION)";
+            reasoningNote = `Note: Market is red (${coin.price_change_percentage_24h.toFixed(2)}%). Buying the dip at a discount!`;
+          } else {
+            actionType = "HOLD / WAIT";
+            reasoningNote = `Note: Market is green. Dip-buyer is waiting for a red candle.`;
+          }
+        } else {
+          // Smart Trend Following
+          const isBullish = coin.price_change_percentage_24h >= 0;
+          actionType = isBullish ? "BUY (TREND)" : "SELL (RISK OFF)";
+          reasoningNote = isBullish ? `Note: Bullish trend detected (+${coin.price_change_percentage_24h.toFixed(2)}%).` : `Note: Bearish trend detected (${coin.price_change_percentage_24h.toFixed(2)}%).`;
+        }
 
         if (actionType.includes("BUY")) {
           if (balanceRef.current < totalCost) {
-            console.log("[Smart Bot] Paused: Insufficient funds for buy order.");
+            setBotLogs((prev) => [`[Paused] Insufficient funds ($${balanceRef.current.toFixed(2)}) for buy order.`, ...prev.slice(0, 15)]);
             return;
           }
           setBalance((prev) => prev - totalCost);
-        } else {
+        } else if (actionType.includes("SELL")) {
           setBalance((prev) => prev + totalCost);
+        } else {
+          // HOLD action, do not execute trade
+          setBotLogs((prev) => [`[Holding] ${reasoningNote}`, ...prev.slice(0, 15)]);
+          return;
         }
 
         const smartTrade: Trade = {
@@ -172,13 +214,94 @@ export default function Home() {
         };
 
         setTrades((prev) => [smartTrade, ...prev]);
-      }, intervalSeconds * 1000);
+        setBotLogs((prev) => [`[Executed] ${actionType} ${amt} ${coin.name} @ $${coin.current_price.toLocaleString()} | ${reasoningNote}`, ...prev.slice(0, 15)]);
+      }, intervalSec * 1000);
     }
 
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [botStatus, botInterval]);
+  }, [botStatus, botInterval, botStrategy]);
+
+  // Auth Handler
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPass }),
+      });
+      const data = await res.json();
+      setUser(data);
+      fetchSessions(data.user_id);
+    } catch {
+      setUser({ id: 1, email: authEmail });
+      const defaultSess = { id: Date.now(), name: "Session 1", balance: 100000, created_at: new Date().toISOString() };
+      setSessions([defaultSess]);
+      setCurrentSession(defaultSess);
+    }
+  };
+
+  const fetchSessions = async (userId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${userId}`);
+      const data = await res.json();
+      setSessions(data);
+      if (data.length > 0) {
+        setCurrentSession(data[0]);
+        setBalance(data[0].balance);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const createNewSession = async () => {
+    if (!user) return;
+    const name = `Session ${sessions.length + 1} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/new`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: user.id, session_name: name }),
+      });
+      const newSess = await res.json();
+      setSessions((prev) => [newSess, ...prev]);
+      setCurrentSession(newSess);
+      setBalance(100000);
+      setTrades([]);
+    } catch {
+      const localSess = { id: Date.now(), name, balance: 100000, created_at: new Date().toISOString() };
+      setSessions((prev) => [localSess, ...prev]);
+      setCurrentSession(localSess);
+      setBalance(100000);
+      setTrades([]);
+    }
+  };
+
+  const loadAiTactics = async () => {
+    const coin = tickers.find((c) => c.id === selectedCoin);
+    if (!coin) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/ai-advisor?asset=${coin.name}&price=${coin.current_price}&change_24h=${coin.price_change_percentage_24h}`);
+      const data = await res.json();
+      setAiTactics(data);
+      setShowTacticsModal(true);
+    } catch {
+      setAiTactics({
+        asset: coin.name,
+        price: `$${coin.current_price.toLocaleString()}`,
+        trend_summary: `${coin.name} 24h Change: ${coin.price_change_percentage_24h.toFixed(2)}%`,
+        beginner_explanation: "When markets are down, aggressive buyers accumulate at a discount, while trend followers wait for confirmation.",
+        recommended_tactics: [
+          { name: "Aggressive Accumulation", explanation: "Buy continuously during market dips to lower your average entry price.", action: "Set bot to Aggressive Buy" },
+          { name: "Risk Management", explanation: "Never invest your entire balance in a single asset.", action: "Protect capital" }
+        ]
+      });
+      setShowTacticsModal(true);
+    }
+  };
 
   const handleTrade = (action: "BUY" | "SELL") => {
     const coin = tickers.find((c) => c.id === selectedCoin);
@@ -190,7 +313,7 @@ export default function Home() {
 
     if (action === "BUY") {
       if (balance < totalCost) {
-        alert("Insufficient funds in your virtual portfolio!");
+        alert("Insufficient portfolio balance!");
         return;
       }
       setBalance((prev) => prev - totalCost);
@@ -210,52 +333,120 @@ export default function Home() {
     setTrades((prev) => [newTrade, ...prev]);
   };
 
-  const toggleBot = () => {
-    setBotStatus((prev) => (prev === "STOPPED" ? "RUNNING" : "STOPPED"));
-  };
-
-  const saveBotConfig = () => {
-    alert("Smart bot parameters successfully saved!");
-  };
-
   const currentCoinObj = tickers.find((c) => c.id === selectedCoin);
 
   return (
-    <main 
-      className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 space-y-6 relative select-none"
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => setIsHovering(false)}
-    >
-      {/* Custom Interactive Cursor Follower */}
+    <main className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 space-y-6 relative select-none">
+      {/* Custom Pointer */}
       <div 
         className="fixed pointer-events-none z-50 h-6 w-6 rounded-full border-2 border-emerald-400 bg-emerald-500/20 backdrop-blur-sm transition-transform duration-75 ease-out hidden md:block"
-        style={{
-          transform: `translate(${cursorPos.x - 12}px, ${cursorPos.y - 12}px)`,
-        }}
+        style={{ transform: `translate(${cursorPos.x - 12}px, ${cursorPos.y - 12}px)` }}
       />
 
-      {/* Top Navbar */}
+      {/* LOGIN / SIGNUP MODAL */}
+      {!user && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={handleAuth} className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md w-full space-y-4 shadow-2xl">
+            <div className="text-center space-y-1">
+              <h2 className="text-2xl font-bold text-white">Welcome Trader</h2>
+              <p className="text-slate-400 text-xs">Sign in or create an account to track session history</p>
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Email Address</label>
+              <input
+                type="email"
+                required
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                placeholder="trader@domain.com"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Password</label>
+              <input
+                type="password"
+                required
+                value={authPass}
+                onChange={(e) => setAuthPass(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition-all hover:scale-105 cursor-pointer">
+              Start Trading & Save Sessions
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* TOP NAVBAR */}
       <nav className="border border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 rounded-xl flex justify-between items-center w-full">
         <div className="flex items-center space-x-3">
           <div className="bg-emerald-500 text-slate-950 font-black px-3 py-1 rounded text-lg">ATS</div>
           <span className="text-xl font-bold tracking-tight">Algo Trading Simulator</span>
         </div>
-        <div className="flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 text-sm">
-          <span className={`h-2.5 w-2.5 rounded-full ${backendStatus?.includes("Running") ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
-          <span className="text-slate-300 font-medium">{backendStatus || "Connecting..."}</span>
+        
+        <div className="flex items-center space-x-4">
+          {user && (
+            <div className="flex items-center space-x-2 text-xs bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className="text-slate-400">User:</span>
+              <span className="text-emerald-400 font-medium">{user.email}</span>
+            </div>
+          )}
+          <button
+            onClick={loadAiTactics}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer"
+          >
+            🧠 AI Tactics & Academy
+          </button>
         </div>
       </nav>
 
-      {/* Stats & Bot Config Row */}
+      {/* SESSIONS BAR */}
+      <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex justify-between items-center overflow-x-auto gap-4">
+        <div className="flex items-center space-x-3">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Session:</span>
+          <select
+            value={currentSession?.id || ""}
+            onChange={(e) => {
+              const selected = sessions.find((s) => s.id === parseInt(e.target.value));
+              if (selected) {
+                setCurrentSession(selected);
+                setBalance(selected.balance);
+              }
+            }}
+            className="bg-slate-950 border border-slate-800 text-xs font-medium text-emerald-400 px-3 py-1.5 rounded-lg focus:outline-none cursor-pointer"
+          >
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} (${s.balance.toLocaleString()})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          onClick={createNewSession}
+          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer"
+        >
+          + Create New Session
+        </button>
+      </div>
+
+      {/* STATS & SMART BOT CONTROL GRID */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 w-full">
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
-          <h3 className="text-slate-400 text-sm font-medium">Portfolio Cash Balance</h3>
+          <h3 className="text-slate-400 text-sm font-medium">Session Cash Balance</h3>
           <p className="text-2xl font-bold text-white mt-1">
             ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </p>
-          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">Independent Session</span>
+          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">
+            {currentSession ? currentSession.name : "Active Session"}
+          </span>
         </div>
 
+        {/* Smart Bot Switcher Card */}
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
             <h3 className="text-slate-400 text-sm font-medium">Smart Algorithmic Bot</h3>
@@ -265,8 +456,8 @@ export default function Home() {
             </div>
           </div>
           <button
-            onClick={toggleBot}
-            className={`mt-4 w-full py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer ${
+            onClick={() => setBotStatus((prev) => (prev === "STOPPED" ? "RUNNING" : "STOPPED"))}
+            className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer ${
               botStatus === "RUNNING"
                 ? "bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600/30"
                 : "bg-emerald-600 text-white hover:bg-emerald-500"
@@ -276,64 +467,51 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Bot Strategy Settings Panel */}
-        <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
+        {/* Smart Strategy Settings */}
+        <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between space-y-2">
           <div>
-            <h3 className="text-slate-400 text-sm font-medium mb-2">Smart Strategy Config</h3>
-            <div className="space-y-2">
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-0.5">Target Asset</label>
-                <select
-                  value={botAsset}
-                  onChange={(e) => setBotAsset(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
-                >
-                  {tickers.map((coin) => (
-                    <option key={coin.id} value={coin.id}>
-                      {coin.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-400 block mb-0.5">Qty</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={botQty}
-                    onChange={(e) => setBotQty(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-400 block mb-0.5">Interval (s)</label>
-                  <input
-                    type="number"
-                    value={botInterval}
-                    onChange={(e) => setBotInterval(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-              </div>
+            <h3 className="text-slate-400 text-sm font-medium mb-1">Bot Strategy Mode</h3>
+            <select
+              value={botStrategy}
+              onChange={(e) => setBotStrategy(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-emerald-400 font-semibold focus:outline-none cursor-pointer mb-2"
+            >
+              <option value="AGGRESSIVE_BUY">Aggressive Buyer (Always Buy)</option>
+              <option value="BUY_THE_DIP">Buy the Dip (Accumulate Red Markets)</option>
+              <option value="TREND_FOLLOWING">Smart Trend Following (Bull/Bear)</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-0.5">Qty</label>
+              <input
+                type="number"
+                step="any"
+                value={botQty}
+                onChange={(e) => setBotQty(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-0.5">Interval (s)</label>
+              <input
+                type="number"
+                value={botInterval}
+                onChange={(e) => setBotInterval(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono"
+              />
             </div>
           </div>
-          <button
-            onClick={saveBotConfig}
-            className="mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer"
-          >
-            Save Parameters
-          </button>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
-          <h3 className="text-slate-400 text-sm font-medium">Total Trades Executed</h3>
+          <h3 className="text-slate-400 text-sm font-medium">Trades Executed</h3>
           <p className="text-2xl font-bold text-white mt-1">{trades.length}</p>
-          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Logged in session</span>
+          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Session Log</span>
         </div>
       </div>
 
-      {/* Chart & Order Simulator Row */}
+      {/* CHART & ORDER SIMULATOR */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
         <div className="bg-slate-900/80 border border-slate-800 p-6 shadow-lg rounded-xl flex flex-col justify-between lg:col-span-2">
           <div className="flex justify-between items-center mb-4">
@@ -394,7 +572,7 @@ export default function Home() {
                   step="any"
                   value={tradeAmount}
                   onChange={(e) => setTradeAmount(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white font-mono focus:outline-none"
                 />
               </div>
             </div>
@@ -410,78 +588,68 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Market Watch Table */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
-        <h2 className="text-lg font-semibold mb-4">Market Watch</h2>
-        {loading ? (
-          <p className="text-slate-400 text-sm">Loading market prices...</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 text-sm">
-                  <th className="py-3 px-4 font-medium">Asset</th>
-                  <th className="py-3 px-4 font-medium">Symbol</th>
-                  <th className="py-3 px-4 font-medium">Price (USD)</th>
-                  <th className="py-3 px-4 font-medium">24h Change</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 text-sm">
-                {tickers.map((coin) => {
-                  const isPositive = coin.price_change_percentage_24h >= 0;
-                  return (
-                    <tr
-                      key={coin.id}
-                      onClick={() => setSelectedCoin(coin.id)}
-                      className={`cursor-pointer transition-colors ${selectedCoin === coin.id ? "bg-slate-800/80 border-l-2 border-emerald-400" : "hover:bg-slate-800/40"}`}
-                    >
-                      <td className="py-3 px-4 font-semibold text-white">{coin.name}</td>
-                      <td className="py-3 px-4 text-slate-400 uppercase font-mono">{coin.symbol}</td>
-                      <td className="py-3 px-4 font-mono font-medium">${coin.current_price.toLocaleString()}</td>
-                      <td className={`py-3 px-4 font-semibold font-mono ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
-                        {isPositive ? "+" : ""}{coin.price_change_percentage_24h.toFixed(2)}%
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* LIVE BOT CONSOLE LOG PANEL WITH EXPLANATORY NOTES */}
+      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full font-mono text-xs space-y-2">
+        <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+          <span className="font-bold text-slate-300 flex items-center space-x-2">
+            <span className={`h-2 w-2 rounded-full ${botStatus === "RUNNING" ? "bg-emerald-400 animate-ping" : "bg-slate-500"}`}></span>
+            <span>Smart Bot Activity Console & Rationale Notes</span>
+          </span>
+          <span className="text-[10px] text-slate-500">Explains every decision in plain English</span>
+        </div>
+        <div className="bg-slate-950 p-3 rounded-lg h-32 overflow-y-auto space-y-1 text-slate-400">
+          {botLogs.length === 0 ? (
+            <p className="text-slate-600">Bot is currently stopped. Select your strategy mode above and click "Start Smart Bot".</p>
+          ) : (
+            botLogs.map((log, idx) => (
+              <div key={idx} className={log.includes("Executed") ? "text-emerald-400 font-semibold" : log.includes("Error") ? "text-rose-400" : ""}>
+                {log}
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
-      {/* Trade History */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
-        <h2 className="text-lg font-semibold mb-4">Trade History</h2>
-        {trades.length === 0 ? (
-          <p className="text-slate-500 text-sm">No trades logged yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2 px-3 font-medium">Type</th>
-                  <th className="py-2 px-3 font-medium">Asset</th>
-                  <th className="py-2 px-3 font-medium">Quantity</th>
-                  <th className="py-2 px-3 font-medium">Price</th>
-                  <th className="py-2 px-3 font-medium">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 font-mono">
-                {trades.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-800/40">
-                    <td className={`py-2 px-3 font-bold ${t.action.includes("BUY") ? "text-emerald-400" : "text-rose-400"}`}>{t.action}</td>
-                    <td className="py-2 px-3 text-white font-sans">{t.asset}</td>
-                    <td className="py-2 px-3">{t.amount}</td>
-                    <td className="py-2 px-3">${t.price.toLocaleString()}</td>
-                    <td className="py-2 px-3">${t.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                  </tr>
+      {/* BEGINNER AI TACTICS MODAL */}
+      {showTacticsModal && aiTactics && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl w-full space-y-4 shadow-2xl relative">
+            <button
+              onClick={() => setShowTacticsModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white text-sm cursor-pointer"
+            >
+              ✕ Close
+            </button>
+            <div className="space-y-1">
+              <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2.5 py-1 rounded-full font-semibold">
+                AI TRADING ACADEMY
+              </span>
+              <h3 className="text-xl font-bold text-white mt-2">
+                Tactics & Strategy for {aiTactics.asset} ({aiTactics.price})
+              </h3>
+              <p className="text-xs text-slate-400">{aiTactics.trend_summary}</p>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl text-xs text-slate-300 leading-relaxed">
+              <span className="font-bold text-emerald-400 block mb-1">💡 Beginner Concept:</span>
+              {aiTactics.beginner_explanation}
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-white">Recommended Trading Tactics:</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {aiTactics.recommended_tactics.map((tac: any, i: number) => (
+                  <div key={i} className="bg-slate-950/60 border border-slate-800 p-3 rounded-xl space-y-1">
+                    <h5 className="text-xs font-bold text-emerald-400">{tac.name}</h5>
+                    <p className="text-[11px] text-slate-300">{tac.explanation}</p>
+                    <span className="text-[10px] text-indigo-400 font-semibold block pt-1">{tac.action}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </main>
   );
 }
