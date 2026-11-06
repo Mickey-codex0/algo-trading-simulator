@@ -5,19 +5,16 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, F
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 import datetime
 import hashlib
-import os
 
 DATABASE_URL = "sqlite:///./trading_simulator.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Secure Password Hashing Helper
 def hash_password(password: str) -> str:
-    salt = "algo_trading_simulator_secure_salt_2026"
+    salt = "algo_trading_simulator_salt_2026"
     return hashlib.sha256((password + salt).encode()).hexdigest()
 
-# Database Models
 class UserModel(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -31,7 +28,6 @@ class TradingSessionModel(Base):
     name = Column(String)
     balance = Column(Float, default=100000.0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    is_active = Column(Boolean, default=True)
 
 class TradeModel(Base):
     __tablename__ = "trades"
@@ -42,6 +38,7 @@ class TradeModel(Base):
     amount = Column(Float)
     price = Column(Float)
     total = Column(Float)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
 
@@ -70,9 +67,17 @@ class StartSessionReq(BaseModel):
     user_id: int
     session_name: str
 
+class SaveTradeReq(BaseModel):
+    session_id: int
+    asset: str
+    action: str
+    amount: float
+    price: float
+    total: float
+
 @app.get("/portfolio")
 def health_check():
-    return {"message": "Backend Running with Secure SQLite DB"}
+    return {"message": "Backend Running with SQLite DB"}
 
 @app.post("/api/auth/login")
 def login(req: AuthReq, db: Session = Depends(get_db)):
@@ -87,7 +92,7 @@ def login(req: AuthReq, db: Session = Depends(get_db)):
         db.add(user)
         db.commit()
         db.refresh(user)
-        # Create initial default session for new user
+        
         init_session = TradingSessionModel(user_id=user.id, name="Session 1 (Default)")
         db.add(init_session)
         db.commit()
@@ -97,7 +102,26 @@ def login(req: AuthReq, db: Session = Depends(get_db)):
 @app.get("/api/sessions/{user_id}")
 def get_user_sessions(user_id: int, db: Session = Depends(get_db)):
     sessions = db.query(TradingSessionModel).filter(TradingSessionModel.user_id == user_id).all()
-    return sorted(sessions, key=lambda s: s.created_at, reverse=True)
+    result = []
+    for s in sorted(sessions, key=lambda x: x.created_at, reverse=True):
+        trades = db.query(TradeModel).filter(TradeModel.session_id == s.id).all()
+        result.append({
+            "id": s.id,
+            "name": s.name,
+            "balance": s.balance,
+            "created_at": s.created_at.strftime("%H:%M:%S"),
+            "trades": [
+                {
+                    "id": t.id,
+                    "asset": t.asset,
+                    "action": t.action,
+                    "amount": t.amount,
+                    "price": t.price,
+                    "total": t.total
+                } for t in trades
+            ]
+        })
+    return result
 
 @app.post("/api/sessions/new")
 def create_new_session(req: StartSessionReq, db: Session = Depends(get_db)):
@@ -105,36 +129,47 @@ def create_new_session(req: StartSessionReq, db: Session = Depends(get_db)):
     db.add(new_sess)
     db.commit()
     db.refresh(new_sess)
-    return new_sess
+    return {
+        "id": new_sess.id,
+        "name": new_sess.name,
+        "balance": new_sess.balance,
+        "created_at": new_sess.created_at.strftime("%H:%M:%S"),
+        "trades": []
+    }
+
+@app.post("/api/trades/save")
+def save_trade(req: SaveTradeReq, db: Session = Depends(get_db)):
+    trade = TradeModel(
+        session_id=req.session_id,
+        asset=req.asset,
+        action=req.action,
+        amount=req.amount,
+        price=req.price,
+        total=req.total
+    )
+    db.add(trade)
+    
+    session = db.query(TradingSessionModel).filter(TradingSessionModel.id == req.session_id).first()
+    if session:
+        if "BUY" in req.action:
+            session.balance -= req.total
+        elif "SELL" in req.action:
+            session.balance += req.total
+
+    db.commit()
+    db.refresh(trade)
+    return {"status": "success", "trade_id": trade.id, "new_balance": session.balance if session else 0}
 
 @app.get("/api/ai-advisor")
 def get_ai_tactics(asset: str, price: float, change_24h: float):
     trend = "Bullish (Upward Trend)" if change_24h >= 0 else "Bearish (Downward Trend)"
-    
     return {
         "asset": asset,
         "price": f"${price:,.2f}",
         "trend_summary": f"{asset} is currently in a {trend} market with a 24h move of {change_24h:.2f}%.",
-        "beginner_explanation": (
-            "Welcome to trading! Think of crypto assets like digital stocks. "
-            "When prices go up (+), buyers are driving demand. When prices fall (-), sellers are taking profits. "
-            "Rule #1 for beginners: Never risk your entire balance on a single trade. Use small increments!"
-        ),
+        "beginner_explanation": "Welcome to trading! Think of crypto assets like digital stocks. When prices go up (+), buyers drive demand. When prices fall (-), sellers take profits.",
         "recommended_tactics": [
-            {
-                "name": "Dollar-Cost Averaging (DCA)",
-                "explanation": "Instead of investing all your money at once, buy small amounts regularly. This protects you if prices suddenly drop.",
-                "action": "Great for steady learning."
-            },
-            {
-                "name": "Buy the Dip",
-                "explanation": "When an asset drops during a red market, buying it at a lower price gives you better upside potential when it bounces back.",
-                "action": "Use during market pullbacks."
-            },
-            {
-                "name": "Risk Management",
-                "explanation": "Always keep track of your cash balance and set clear goals for when to take profits or cut losses.",
-                "action": "Protect your capital."
-            }
+            {"name": "Dollar-Cost Averaging (DCA)", "explanation": "Spread your purchases over time to avoid buying at the absolute peak.", "action": "Great for steady learning."},
+            {"name": "Buy the Dip", "explanation": "When an asset drops during a red market, buying at a lower price gives better upside potential.", "action": "Use during market pullbacks."}
         ]
     }
