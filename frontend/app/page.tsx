@@ -47,6 +47,7 @@ export default function Home() {
   
   const [sessions, setSessions] = useState<TradingSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   // Active Session Specific States
   const [balance, setBalance] = useState<number>(100000);
@@ -142,7 +143,6 @@ export default function Home() {
     if (!authEmail) return;
     setUser({ email: authEmail });
     
-    // Initialize first default session
     const initialSession: TradingSession = {
       id: Date.now(),
       name: "Session 1 (Default)",
@@ -158,7 +158,6 @@ export default function Home() {
 
   // Create New Session & Archive Previous
   const createNewSession = () => {
-    // Save current session state first before switching
     if (currentSessionId !== null) {
       setSessions((prev) =>
         prev.map((s) => (s.id === currentSessionId ? { ...s, balance, trades } : s))
@@ -185,7 +184,6 @@ export default function Home() {
 
   // Switch between archived sessions
   const handleSessionSwitch = (sessionId: number) => {
-    // Save current state first
     if (currentSessionId !== null) {
       setSessions((prev) =>
         prev.map((s) => (s.id === currentSessionId ? { ...s, balance, trades } : s))
@@ -201,7 +199,7 @@ export default function Home() {
     }
   };
 
-  // Sync state changes back to the active session object
+  // Sync state changes back to active session
   useEffect(() => {
     if (currentSessionId !== null) {
       setSessions((prev) =>
@@ -392,13 +390,19 @@ export default function Home() {
           <span className="text-xl font-bold tracking-tight">Algo Trading Simulator</span>
         </div>
         
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3">
           {user && (
             <div className="flex items-center space-x-2 text-xs bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
               <span className="text-slate-400">User:</span>
               <span className="text-emerald-400 font-medium">{user.email}</span>
             </div>
           )}
+          <button
+            onClick={() => setShowHistoryModal(true)}
+            className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer border border-slate-700"
+          >
+            📂 View Past Sessions History
+          </button>
           <button
             onClick={loadAiTactics}
             className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer"
@@ -608,6 +612,134 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* MARKET WATCH TABLE (RESTORED) */}
+      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
+        <h2 className="text-lg font-semibold mb-4">Market Watch</h2>
+        {loading ? (
+          <p className="text-slate-400 text-sm">Loading market prices...</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400 text-sm">
+                  <th className="py-3 px-4 font-medium">Asset</th>
+                  <th className="py-3 px-4 font-medium">Symbol</th>
+                  <th className="py-3 px-4 font-medium">Price (USD)</th>
+                  <th className="py-3 px-4 font-medium">24h Change</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50 text-sm">
+                {tickers.map((coin) => {
+                  const isPositive = coin.price_change_percentage_24h >= 0;
+                  return (
+                    <tr
+                      key={coin.id}
+                      onClick={() => setSelectedCoin(coin.id)}
+                      className={`cursor-pointer transition-colors ${selectedCoin === coin.id ? "bg-slate-800/80 border-l-2 border-emerald-400" : "hover:bg-slate-800/40"}`}
+                    >
+                      <td className="py-3 px-4 font-semibold text-white">{coin.name}</td>
+                      <td className="py-3 px-4 text-slate-400 uppercase font-mono">{coin.symbol}</td>
+                      <td className="py-3 px-4 font-mono font-medium">${coin.current_price.toLocaleString()}</td>
+                      <td className={`py-3 px-4 font-semibold font-mono ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
+                        {isPositive ? "+" : ""}{coin.price_change_percentage_24h.toFixed(2)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* TRADE HISTORY TABLE (RESTORED) */}
+      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
+        <h2 className="text-lg font-semibold mb-4">Active Session Trade History</h2>
+        {trades.length === 0 ? (
+          <p className="text-slate-500 text-sm">No trades logged yet in this session.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400">
+                  <th className="py-2 px-3 font-medium">Type</th>
+                  <th className="py-2 px-3 font-medium">Asset</th>
+                  <th className="py-2 px-3 font-medium">Quantity</th>
+                  <th className="py-2 px-3 font-medium">Price</th>
+                  <th className="py-2 px-3 font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50 font-mono">
+                {trades.map((t) => (
+                  <tr key={t.id} className="hover:bg-slate-800/40">
+                    <td className={`py-2 px-3 font-bold ${t.action.includes("BUY") ? "text-emerald-400" : "text-rose-400"}`}>{t.action}</td>
+                    <td className="py-2 px-3 text-white font-sans">{t.asset}</td>
+                    <td className="py-2 px-3">{t.amount}</td>
+                    <td className="py-2 px-3">${t.price.toLocaleString()}</td>
+                    <td className="py-2 px-3">${t.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* PAST SESSIONS HISTORY INSPECTOR MODAL */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-3xl w-full space-y-4 shadow-2xl relative max-h-[80vh] overflow-y-auto">
+            <button
+              onClick={() => setShowHistoryModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white text-sm cursor-pointer"
+            >
+              ✕ Close
+            </button>
+            <div className="space-y-1">
+              <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2.5 py-1 rounded-full font-semibold">
+                ARCHIVED SESSIONS INSPECTOR
+              </span>
+              <h3 className="text-xl font-bold text-white mt-2">All Stored Trading Sessions</h3>
+              <p className="text-xs text-slate-400">Review final balances and complete trade logs of all sessions created during your visit.</p>
+            </div>
+
+            <div className="space-y-4 mt-4">
+              {sessions.map((sess) => (
+                <div key={sess.id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                    <div>
+                      <h4 className="text-sm font-bold text-white">{sess.name}</h4>
+                      <span className="text-[10px] text-slate-500">Created at {sess.created_at}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-xs text-slate-400">Ending Balance:</span>
+                      <p className="text-sm font-mono font-bold text-emerald-400">${sess.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                    </div>
+                  </div>
+
+                  {sess.trades.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic">No trades recorded in this session.</p>
+                  ) : (
+                    <div className="text-xs space-y-1">
+                      <span className="text-slate-400 font-semibold block mb-1">Trades Log ({sess.trades.length}):</span>
+                      <div className="max-h-28 overflow-y-auto space-y-1 font-mono bg-slate-900/60 p-2 rounded">
+                        {sess.trades.map((tr) => (
+                          <div key={tr.id} className="flex justify-between text-[11px] text-slate-300">
+                            <span className={tr.action.includes("BUY") ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>{tr.action}</span>
+                            <span>{tr.amount} {tr.asset}</span>
+                            <span>${tr.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* BEGINNER AI TACTICS MODAL */}
       {showTacticsModal && aiTactics && (
