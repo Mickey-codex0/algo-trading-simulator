@@ -1,120 +1,140 @@
-import asyncio
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, ForeignKey, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+import datetime
+import hashlib
+import os
+
+DATABASE_URL = "sqlite:///./trading_simulator.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Secure Password Hashing Helper
+def hash_password(password: str) -> str:
+    salt = "algo_trading_simulator_secure_salt_2026"
+    return hashlib.sha256((password + salt).encode()).hexdigest()
+
+# Database Models
+class UserModel(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    password = Column(String)
+
+class TradingSessionModel(Base):
+    __tablename__ = "sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    name = Column(String)
+    balance = Column(Float, default=100000.0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+class TradeModel(Base):
+    __tablename__ = "trades"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    asset = Column(String)
+    action = Column(String)
+    amount = Column(Float)
+    price = Column(Float)
+    total = Column(Float)
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Enable CORS for Next.js frontend (Localhost and all Vercel preview/production deployments)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-Memory State Authority
-portfolio = {
-    "balance": 100000.0,
-    "trades": []
-}
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-bot_status = "STOPPED"
+class AuthReq(BaseModel):
+    email: str
+    password: str
 
-# Configurable Bot Strategy Parameters
-bot_config = {
-    "target_asset": "Bitcoin",
-    "quantity": 0.05,
-    "frequency_seconds": 10
-}
-
-class TradeRequest(BaseModel):
-    asset: str
-    action: str
-    amount: float
-    price: float
-
-class BotConfigModel(BaseModel):
-    target_asset: str
-    quantity: float
-    frequency_seconds: int
-
-@app.get("/")
-def read_root():
-    return {"message": "Algorithmic Trading Simulator Backend is Running!"}
+class StartSessionReq(BaseModel):
+    user_id: int
+    session_name: str
 
 @app.get("/portfolio")
-def get_portfolio():
-    return {
-        "balance": portfolio["balance"],
-        "trades": portfolio["trades"],
-        "bot_status": bot_status,
-        "bot_config": bot_config
-    }
+def health_check():
+    return {"message": "Backend Running with Secure SQLite DB"}
 
-@app.post("/trade")
-def execute_trade(trade: TradeRequest):
-    total_cost = trade.amount * trade.price
+@app.post("/api/auth/login")
+def login(req: AuthReq, db: Session = Depends(get_db)):
+    hashed_pwd = hash_password(req.password)
+    user = db.query(UserModel).filter(UserModel.email == req.email).first()
     
-    if trade.action == "BUY" and portfolio["balance"] < total_cost:
-        return {"error": "Insufficient portfolio cash balance!"}
-    
-    if trade.action == "BUY":
-        portfolio["balance"] -= total_cost
-    else:  # SELL / SHORT
-        portfolio["balance"] += total_cost
-
-    new_trade = {
-        "id": len(portfolio["trades"]) + 1,
-        "asset": trade.asset,
-        "action": trade.action,
-        "amount": trade.amount,
-        "price": trade.price,
-        "total": total_cost
-    }
-    
-    portfolio["trades"].insert(0, new_trade)
-    return {"message": "Trade executed successfully", "portfolio": portfolio}
-
-@app.post("/bot/config")
-def update_bot_config(config: BotConfigModel):
-    global bot_config
-    bot_config["target_asset"] = config.target_asset
-    bot_config["quantity"] = config.quantity
-    bot_config["frequency_seconds"] = config.frequency_seconds
-    return {"message": "Bot configuration updated", "config": bot_config}
-
-async def autonomous_trading_loop():
-    global bot_status
-    while bot_status == "RUNNING":
-        asset = bot_config["target_asset"]
-        qty = bot_config["quantity"]
-        interval = bot_config["frequency_seconds"]
-        
-        simulated_price = 78000.0 if asset == "Bitcoin" else (2200.0 if asset == "Ethereum" else 100.0)
-        total_cost = qty * simulated_price
-        
-        if portfolio["balance"] >= total_cost:
-            portfolio["balance"] -= total_cost
-            new_trade = {
-                "id": len(portfolio["trades"]) + 1,
-                "asset": asset,
-                "action": "BUY (BOT)",
-                "amount": qty,
-                "price": simulated_price,
-                "total": total_cost
-            }
-            portfolio["trades"].insert(0, new_trade)
-            
-        await asyncio.sleep(interval)
-
-@app.post("/bot/toggle")
-def toggle_bot(background_tasks: BackgroundTasks):
-    global bot_status
-    if bot_status == "STOPPED":
-        bot_status = "RUNNING"
-        background_tasks.add_task(autonomous_trading_loop)
+    if user:
+        if user.password != hashed_pwd:
+            raise HTTPException(status_code=400, detail="Incorrect password.")
     else:
-        bot_status = "STOPPED"
-    return {"bot_status": bot_status}
+        user = UserModel(email=req.email, password=hashed_pwd)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        # Create initial default session for new user
+        init_session = TradingSessionModel(user_id=user.id, name="Session 1 (Default)")
+        db.add(init_session)
+        db.commit()
+        
+    return {"user_id": user.id, "email": user.email}
+
+@app.get("/api/sessions/{user_id}")
+def get_user_sessions(user_id: int, db: Session = Depends(get_db)):
+    sessions = db.query(TradingSessionModel).filter(TradingSessionModel.user_id == user_id).all()
+    return sorted(sessions, key=lambda s: s.created_at, reverse=True)
+
+@app.post("/api/sessions/new")
+def create_new_session(req: StartSessionReq, db: Session = Depends(get_db)):
+    new_sess = TradingSessionModel(user_id=req.user_id, name=req.session_name, balance=100000.0)
+    db.add(new_sess)
+    db.commit()
+    db.refresh(new_sess)
+    return new_sess
+
+@app.get("/api/ai-advisor")
+def get_ai_tactics(asset: str, price: float, change_24h: float):
+    trend = "Bullish (Upward Trend)" if change_24h >= 0 else "Bearish (Downward Trend)"
+    
+    return {
+        "asset": asset,
+        "price": f"${price:,.2f}",
+        "trend_summary": f"{asset} is currently in a {trend} market with a 24h move of {change_24h:.2f}%.",
+        "beginner_explanation": (
+            "Welcome to trading! Think of crypto assets like digital stocks. "
+            "When prices go up (+), buyers are driving demand. When prices fall (-), sellers are taking profits. "
+            "Rule #1 for beginners: Never risk your entire balance on a single trade. Use small increments!"
+        ),
+        "recommended_tactics": [
+            {
+                "name": "Dollar-Cost Averaging (DCA)",
+                "explanation": "Instead of investing all your money at once, buy small amounts regularly. This protects you if prices suddenly drop.",
+                "action": "Great for steady learning."
+            },
+            {
+                "name": "Buy the Dip",
+                "explanation": "When an asset drops during a red market, buying it at a lower price gives you better upside potential when it bounces back.",
+                "action": "Use during market pullbacks."
+            },
+            {
+                "name": "Risk Management",
+                "explanation": "Always keep track of your cash balance and set clear goals for when to take profits or cut losses.",
+                "action": "Protect your capital."
+            }
+        ]
+    }

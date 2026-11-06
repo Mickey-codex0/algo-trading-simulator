@@ -30,12 +30,26 @@ interface Trade {
   total: number;
 }
 
+interface TradingSession {
+  id: number;
+  name: string;
+  balance: number;
+  created_at: string;
+}
+
 export default function Home() {
   const [backendStatus, setBackendStatus] = useState("Connecting...");
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Independent session states
+  // User & Sessions State
+  const [user, setUser] = useState<{ id: number; email: string } | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [sessions, setSessions] = useState<TradingSession[]>([]);
+  const [currentSession, setCurrentSession] = useState<TradingSession | null>(null);
+
+  // Session Specific States
   const [balance, setBalance] = useState<number>(100000);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [botStatus, setBotStatus] = useState<string>("STOPPED");
@@ -43,17 +57,21 @@ export default function Home() {
   const [tradeAmount, setTradeAmount] = useState<string>("1");
   const [chartData, setChartData] = useState<any[]>([]);
 
-  // Bot strategy settings
+  // Bot & Strategy Config State
   const [botAsset, setBotAsset] = useState<string>("bitcoin");
   const [botQty, setBotQty] = useState<string>("0.05");
   const [botInterval, setBotInterval] = useState<string>("5");
   const [botStrategy, setBotStrategy] = useState<string>("AGGRESSIVE_BUY");
   const [botLogs, setBotLogs] = useState<string[]>([]);
+  
+  // AI Academy Modal State
+  const [aiTactics, setAiTactics] = useState<any>(null);
+  const [showTacticsModal, setShowTacticsModal] = useState(false);
 
-  // Custom Cursor state
+  // Custom Cursor
   const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });
 
-  // REFS to ensure timer always reads live values without closures
+  // REFS for loop access
   const tickersRef = useRef(tickers);
   tickersRef.current = tickers;
 
@@ -77,7 +95,7 @@ export default function Home() {
     return () => window.removeEventListener("mousemove", handleMouseMove);
   }, []);
 
-  // Fetch initial market prices from CoinGecko
+  // Fetch initial market data
   useEffect(() => {
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
@@ -108,7 +126,7 @@ export default function Home() {
       .catch(() => setLoading(false));
   }, []);
 
-  // Update area chart on selection
+  // Chart update on selection
   useEffect(() => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (coin) {
@@ -124,7 +142,86 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  // SMART BOT EXECUTION LOOP WITH RATIONALE CONSOLE LOGS
+  // Auth Handler with error handling
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPass }),
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        alert(errData.detail || "Authentication failed");
+        return;
+      }
+      const data = await res.json();
+      setUser(data);
+      fetchSessions(data.user_id);
+    } catch {
+      alert("Unable to connect to backend server for authentication.");
+    }
+  };
+
+  const fetchSessions = async (userId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${userId}`);
+      const data = await res.json();
+      setSessions(data);
+      if (data.length > 0) {
+        setCurrentSession(data[0]);
+        setBalance(data[0].balance);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const createNewSession = async () => {
+    if (!user) return;
+    const name = `Session ${sessions.length + 1} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/new`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: user.id, session_name: name }),
+      });
+      const newSess = await res.json();
+      setSessions((prev) => [newSess, ...prev]);
+      setCurrentSession(newSess);
+      setBalance(100000);
+      setTrades([]);
+    } catch {
+      alert("Failed to create new session on server.");
+    }
+  };
+
+  // Fetch AI Beginner Academy & Tactics
+  const loadAiTactics = async () => {
+    const coin = tickers.find((c) => c.id === selectedCoin);
+    if (!coin) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/ai-advisor?asset=${coin.name}&price=${coin.current_price}&change_24h=${coin.price_change_percentage_24h}`);
+      const data = await res.json();
+      setAiTactics(data);
+      setShowTacticsModal(true);
+    } catch {
+      setAiTactics({
+        asset: coin.name,
+        price: `$${coin.current_price.toLocaleString()}`,
+        trend_summary: `${coin.name} 24h Change: ${coin.price_change_percentage_24h.toFixed(2)}%`,
+        beginner_explanation: "Trading is about analyzing risk. When prices drop, smart beginners accumulate steadily using DCA (Dollar-Cost Averaging) rather than panic selling.",
+        recommended_tactics: [
+          { name: "Dollar-Cost Averaging", explanation: "Spread your purchases over time to avoid buying at the absolute peak.", action: "Recommended for beginners" },
+          { name: "Buy the Dip", explanation: "Take advantage of red markets to accumulate assets at a discount.", action: "Use during pullbacks" }
+        ]
+      });
+      setShowTacticsModal(true);
+    }
+  };
+
+  // SMART BOT EXECUTION LOOP WITH RATIONALE NOTES
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
@@ -145,20 +242,16 @@ export default function Home() {
         }
 
         const amt = parseFloat(botQtyRef.current);
-        if (isNaN(amt) || amt <= 0) {
-          setBotLogs((prev) => [`[Error] Invalid bot quantity set.`, ...prev.slice(0, 15)]);
-          return;
-        }
+        if (isNaN(amt) || amt <= 0) return;
 
         const totalCost = amt * coin.current_price;
         const currentStrategy = botStrategyRef.current;
         let actionType = "BUY (BOT)";
         let reasoningNote = "";
 
-        // Evaluate Bot Strategy Rules
         if (currentStrategy === "AGGRESSIVE_BUY") {
           actionType = "BUY (AGGRESSIVE)";
-          reasoningNote = `Note: Aggressive mode active. Buying despite 24h market move (${coin.price_change_percentage_24h.toFixed(2)}%).`;
+          reasoningNote = `Note: Aggressive mode active. Buying continuously despite market moves (${coin.price_change_percentage_24h.toFixed(2)}%).`;
         } else if (currentStrategy === "BUY_THE_DIP") {
           if (coin.price_change_percentage_24h < 0) {
             actionType = "BUY (DIP ACCUMULATION)";
@@ -168,7 +261,6 @@ export default function Home() {
             reasoningNote = `Note: Market is green. Dip-buyer is waiting for a red candle.`;
           }
         } else {
-          // Trend Following Strategy
           const isBullish = coin.price_change_percentage_24h >= 0;
           actionType = isBullish ? "BUY (TREND)" : "SELL (RISK OFF)";
           reasoningNote = isBullish 
@@ -185,7 +277,6 @@ export default function Home() {
         } else if (actionType.includes("SELL")) {
           setBalance((prev) => prev + totalCost);
         } else {
-          // HOLD action
           setBotLogs((prev) => [`[Holding] ${reasoningNote}`, ...prev.slice(0, 15)]);
           return;
         }
@@ -249,29 +340,110 @@ export default function Home() {
         style={{ transform: `translate(${cursorPos.x - 12}px, ${cursorPos.y - 12}px)` }}
       />
 
+      {/* LOGIN / SIGNUP MODAL */}
+      {!user && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={handleAuth} className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md w-full space-y-4 shadow-2xl">
+            <div className="text-center space-y-1">
+              <h2 className="text-2xl font-bold text-white">Welcome Trader</h2>
+              <p className="text-slate-400 text-xs">Sign in or create an account to store and browse past sessions securely</p>
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Email Address</label>
+              <input
+                type="email"
+                required
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                placeholder="trader@domain.com"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Password</label>
+              <input
+                type="password"
+                required
+                value={authPass}
+                onChange={(e) => setAuthPass(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition-all hover:scale-105 cursor-pointer">
+              Secure Sign In / Sign Up
+            </button>
+          </form>
+        </div>
+      )}
+
       {/* TOP NAVBAR */}
       <nav className="border border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 rounded-xl flex justify-between items-center w-full">
         <div className="flex items-center space-x-3">
           <div className="bg-emerald-500 text-slate-950 font-black px-3 py-1 rounded text-lg">ATS</div>
           <span className="text-xl font-bold tracking-tight">Algo Trading Simulator</span>
         </div>
-        <div className="flex items-center space-x-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 text-sm">
-          <span className={`h-2.5 w-2.5 rounded-full ${backendStatus?.includes("Running") ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
-          <span className="text-slate-300 font-medium">{backendStatus || "Connecting..."}</span>
+        
+        <div className="flex items-center space-x-4">
+          {user && (
+            <div className="flex items-center space-x-2 text-xs bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+              <span className="text-slate-400">User:</span>
+              <span className="text-emerald-400 font-medium">{user.email}</span>
+            </div>
+          )}
+          <button
+            onClick={loadAiTactics}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer"
+          >
+            🧠 AI Tactics & Academy
+          </button>
         </div>
       </nav>
 
-      {/* STATS & BOT CONTROLS GRID */}
+      {/* SESSIONS & HISTORY CONTROL BAR */}
+      <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex justify-between items-center overflow-x-auto gap-4">
+        <div className="flex items-center space-x-3">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Session:</span>
+          <select
+            value={currentSession?.id || ""}
+            onChange={(e) => {
+              const selected = sessions.find((s) => s.id === parseInt(e.target.value));
+              if (selected) {
+                setCurrentSession(selected);
+                setBalance(selected.balance);
+              }
+            }}
+            className="bg-slate-950 border border-slate-800 text-xs font-medium text-emerald-400 px-3 py-1.5 rounded-lg focus:outline-none cursor-pointer"
+          >
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} (${s.balance.toLocaleString()})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          onClick={createNewSession}
+          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all hover:scale-105 cursor-pointer"
+        >
+          + Create New Session
+        </button>
+      </div>
+
+      {/* STATS & SMART BOT CONTROL GRID */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 w-full">
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
-          <h3 className="text-slate-400 text-sm font-medium">Portfolio Cash Balance</h3>
+          <h3 className="text-slate-400 text-sm font-medium">Session Cash Balance</h3>
           <p className="text-2xl font-bold text-white mt-1">
             ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </p>
-          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">Independent Session</span>
+          <span className="text-xs text-emerald-400 font-semibold mt-2 inline-block">
+            {currentSession ? currentSession.name : "Active Session"}
+          </span>
         </div>
 
-        {/* Smart Bot Start/Stop */}
+        {/* Smart Bot Switcher Card */}
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
             <h3 className="text-slate-400 text-sm font-medium">Smart Algorithmic Bot</h3>
@@ -282,7 +454,7 @@ export default function Home() {
           </div>
           <button
             onClick={() => setBotStatus((prev) => (prev === "STOPPED" ? "RUNNING" : "STOPPED"))}
-            className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+            className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer ${
               botStatus === "RUNNING"
                 ? "bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600/30"
                 : "bg-emerald-600 text-white hover:bg-emerald-500"
@@ -292,7 +464,7 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Bot Strategy Selector Panel */}
+        {/* Smart Strategy Settings */}
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between space-y-2">
           <div>
             <h3 className="text-slate-400 text-sm font-medium mb-1">Strategy Mode</h3>
@@ -314,7 +486,7 @@ export default function Home() {
                 step="any"
                 value={botQty}
                 onChange={(e) => setBotQty(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono focus:outline-none"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono"
               />
             </div>
             <div>
@@ -323,7 +495,7 @@ export default function Home() {
                 type="number"
                 value={botInterval}
                 onChange={(e) => setBotInterval(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono focus:outline-none"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs text-white font-mono"
               />
             </div>
           </div>
@@ -332,7 +504,7 @@ export default function Home() {
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg">
           <h3 className="text-slate-400 text-sm font-medium">Trades Executed</h3>
           <p className="text-2xl font-bold text-white mt-1">{trades.length}</p>
-          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Logged in session</span>
+          <span className="text-xs text-slate-400 font-semibold mt-2 inline-block">Session Log</span>
         </div>
       </div>
 
@@ -371,7 +543,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Manual Order Simulator */}
+        {/* Order Simulator */}
         <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-semibold mb-4">Order Simulator</h2>
@@ -413,7 +585,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* LIVE BOT RATIONALE CONSOLE LOG */}
+      {/* LIVE BOT CONSOLE LOG PANEL */}
       <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full font-mono text-xs space-y-2">
         <div className="flex justify-between items-center border-b border-slate-800 pb-2">
           <span className="font-bold text-slate-300 flex items-center space-x-2">
@@ -435,78 +607,46 @@ export default function Home() {
         </div>
       </div>
 
-      {/* MARKET WATCH TABLE */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
-        <h2 className="text-lg font-semibold mb-4">Market Watch</h2>
-        {loading ? (
-          <p className="text-slate-400 text-sm">Loading market prices...</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 text-sm">
-                  <th className="py-3 px-4 font-medium">Asset</th>
-                  <th className="py-3 px-4 font-medium">Symbol</th>
-                  <th className="py-3 px-4 font-medium">Price (USD)</th>
-                  <th className="py-3 px-4 font-medium">24h Change</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 text-sm">
-                {tickers.map((coin) => {
-                  const isPositive = coin.price_change_percentage_24h >= 0;
-                  return (
-                    <tr
-                      key={coin.id}
-                      onClick={() => setSelectedCoin(coin.id)}
-                      className={`cursor-pointer transition-colors ${selectedCoin === coin.id ? "bg-slate-800/80 border-l-2 border-emerald-400" : "hover:bg-slate-800/40"}`}
-                    >
-                      <td className="py-3 px-4 font-semibold text-white">{coin.name}</td>
-                      <td className="py-3 px-4 text-slate-400 uppercase font-mono">{coin.symbol}</td>
-                      <td className="py-3 px-4 font-mono font-medium">${coin.current_price.toLocaleString()}</td>
-                      <td className={`py-3 px-4 font-semibold font-mono ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
-                        {isPositive ? "+" : ""}{coin.price_change_percentage_24h.toFixed(2)}%
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* BEGINNER AI TACTICS MODAL */}
+      {showTacticsModal && aiTactics && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl w-full space-y-4 shadow-2xl relative">
+            <button
+              onClick={() => setShowTacticsModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white text-sm cursor-pointer"
+            >
+              ✕ Close
+            </button>
+            <div className="space-y-1">
+              <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2.5 py-1 rounded-full font-semibold">
+                AI TRADING ACADEMY
+              </span>
+              <h3 className="text-xl font-bold text-white mt-2">
+                Tactics & Strategy for {aiTactics.asset} ({aiTactics.price})
+              </h3>
+              <p className="text-xs text-slate-400">{aiTactics.trend_summary}</p>
+            </div>
 
-      {/* TRADE HISTORY */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-xl shadow-lg w-full">
-        <h2 className="text-lg font-semibold mb-4">Trade History</h2>
-        {trades.length === 0 ? (
-          <p className="text-slate-500 text-sm">No trades logged yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2 px-3 font-medium">Type</th>
-                  <th className="py-2 px-3 font-medium">Asset</th>
-                  <th className="py-2 px-3 font-medium">Quantity</th>
-                  <th className="py-2 px-3 font-medium">Price</th>
-                  <th className="py-2 px-3 font-medium">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 font-mono">
-                {trades.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-800/40">
-                    <td className={`py-2 px-3 font-bold ${t.action.includes("BUY") ? "text-emerald-400" : "text-rose-400"}`}>{t.action}</td>
-                    <td className="py-2 px-3 text-white font-sans">{t.asset}</td>
-                    <td className="py-2 px-3">{t.amount}</td>
-                    <td className="py-2 px-3">${t.price.toLocaleString()}</td>
-                    <td className="py-2 px-3">${t.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                  </tr>
+            <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl text-xs text-slate-300 leading-relaxed">
+              <span className="font-bold text-emerald-400 block mb-1">💡 Beginner Concept:</span>
+              {aiTactics.beginner_explanation}
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-white">Recommended Trading Tactics:</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {aiTactics.recommended_tactics.map((tac: any, i: number) => (
+                  <div key={i} className="bg-slate-950/60 border border-slate-800 p-3 rounded-xl space-y-1">
+                    <h5 className="text-xs font-bold text-emerald-400">{tac.name}</h5>
+                    <p className="text-[11px] text-slate-300">{tac.explanation}</p>
+                    <span className="text-[10px] text-indigo-400 font-semibold block pt-1">{tac.action}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </main>
   );
 }
