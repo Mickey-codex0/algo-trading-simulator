@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -40,7 +40,7 @@ export default function Home() {
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Independent local session states per browser tab/user
+  // Independent local session states
   const [balance, setBalance] = useState<number>(100000);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [botStatus, setBotStatus] = useState<string>("STOPPED");
@@ -51,6 +51,19 @@ export default function Home() {
   const [botAsset, setBotAsset] = useState<string>("Bitcoin");
   const [botQty, setBotQty] = useState<string>("0.05");
   const [botInterval, setBotInterval] = useState<string>("10");
+
+  // Use REFS so the interval always reads the latest values without resetting
+  const tickersRef = useRef(tickers);
+  tickersRef.current = tickers;
+
+  const botAssetRef = useRef(botAsset);
+  botAssetRef.current = botAsset;
+
+  const botQtyRef = useRef(botQty);
+  botQtyRef.current = botQty;
+
+  const balanceRef = useRef(balance);
+  balanceRef.current = balance;
 
   useEffect(() => {
     // Check backend connection status
@@ -68,6 +81,7 @@ export default function Home() {
         setTickers(data);
         if (data.length > 0) {
           setSelectedCoin(data[0].id);
+          setBotAsset(data[0].name); // Default bot asset to first coin
           const p = data[0].current_price;
           setChartData([
             { time: "10m ago", price: p * 0.99 },
@@ -101,30 +115,36 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  // Automated Bot Execution Loop
+  // Robust Automated Bot Execution Loop using REFS
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
     if (botStatus === "RUNNING") {
       const intervalSeconds = parseInt(botInterval) || 10;
-      
-      intervalId = setInterval(() => {
-        const coin = tickers.find((c) => c.name === botAsset);
-        if (!coin) return;
+      console.log(`Bot started with interval: ${intervalSeconds}s`);
 
-        const amt = parseFloat(botQty);
+      intervalId = setInterval(() => {
+        const currentTickers = tickersRef.current;
+        const targetAssetName = botAssetRef.current;
+        const coin = currentTickers.find((c) => c.name === targetAssetName);
+
+        if (!coin) {
+          console.warn("Bot could not find asset:", targetAssetName);
+          return;
+        }
+
+        const amt = parseFloat(botQtyRef.current);
         if (isNaN(amt) || amt <= 0) return;
 
         const totalCost = amt * coin.current_price;
 
-        setBalance((prev) => {
-          if (prev < totalCost) {
-            console.log("Bot stopped: Insufficient funds");
-            setBotStatus("STOPPED");
-            return prev;
-          }
-          return prev - totalCost;
-        });
+        if (balanceRef.current < totalCost) {
+          console.log("Bot stopped: Insufficient funds");
+          setBotStatus("STOPPED");
+          return;
+        }
+
+        setBalance((prev) => prev - totalCost);
 
         const autoTrade: Trade = {
           id: Date.now(),
@@ -142,9 +162,9 @@ export default function Home() {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [botStatus, botInterval, botAsset, botQty, tickers]);
+  }, [botStatus, botInterval]);
 
-  // Handle local simulation trades so each user/device is independent
+  // Handle local simulation trades
   const handleTrade = (action: "BUY" | "SELL") => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (!coin) return;
