@@ -48,11 +48,23 @@ export default function Home() {
   const [tradeAmount, setTradeAmount] = useState<string>("1");
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
 
-  const [botAsset, setBotAsset] = useState<string>("Bitcoin");
+  const [botAsset, setBotAsset] = useState<string>("bitcoin");
   const [botQty, setBotQty] = useState<string>("0.05");
-  const [botInterval, setBotInterval] = useState<string>("10");
+  const [botInterval, setBotInterval] = useState<string>("5");
 
-  // Use REFS so the interval always reads the latest values without resetting
+  // Custom Cursor state for hover/click interactive feel
+  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });
+  const [isHovering, setIsHovering] = useState(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setCursorPos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => window.removeEventListener("mousemove", handleMouseMove);
+  }, []);
+
+  // Use REFS for reliable timer access
   const tickersRef = useRef(tickers);
   tickersRef.current = tickers;
 
@@ -66,13 +78,11 @@ export default function Home() {
   balanceRef.current = balance;
 
   useEffect(() => {
-    // Check backend connection status
     fetch(`${API_BASE}/portfolio`)
       .then((res) => res.json())
       .then((data) => setBackendStatus(data.message || "Running"))
       .catch(() => setBackendStatus("Backend Offline"));
 
-    // Fetch crypto market prices from CoinGecko
     fetch(
       "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,cardano&order=market_cap_desc"
     )
@@ -81,7 +91,6 @@ export default function Home() {
         setTickers(data);
         if (data.length > 0) {
           setSelectedCoin(data[0].id);
-          setBotAsset(data[0].name); // Default bot asset to first coin
           const p = data[0].current_price;
           setChartData([
             { time: "10m ago", price: p * 0.99 },
@@ -115,21 +124,21 @@ export default function Home() {
     }
   }, [selectedCoin, tickers]);
 
-  // Robust Automated Bot Execution Loop using REFS
+  // SMART BOT LOOP: Evaluates market conditions and alternates Buy/Sell dynamically
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
     if (botStatus === "RUNNING") {
-      const intervalSeconds = parseInt(botInterval) || 10;
-      console.log(`Bot started with interval: ${intervalSeconds}s`);
+      const intervalSeconds = parseInt(botInterval) || 5;
+      console.log(`[Smart Bot] Activated on asset: ${botAsset} every ${intervalSeconds}s`);
 
       intervalId = setInterval(() => {
         const currentTickers = tickersRef.current;
-        const targetAssetName = botAssetRef.current;
-        const coin = currentTickers.find((c) => c.name === targetAssetName);
+        const targetId = botAssetRef.current;
+        const coin = currentTickers.find((c) => c.id === targetId);
 
         if (!coin) {
-          console.warn("Bot could not find asset:", targetAssetName);
+          console.warn("[Smart Bot] Asset not found:", targetId);
           return;
         }
 
@@ -138,24 +147,31 @@ export default function Home() {
 
         const totalCost = amt * coin.current_price;
 
-        if (balanceRef.current < totalCost) {
-          console.log("Bot stopped: Insufficient funds");
-          setBotStatus("STOPPED");
-          return;
+        // Smart Strategy Logic: 
+        // If 24h change is positive, trend is bullish -> BUY. If negative -> SELL to take profit/cut losses.
+        const isBullish = coin.price_change_percentage_24h >= 0;
+        const actionType = isBullish ? "BUY (SMART BOT)" : "SELL (SMART BOT)";
+
+        if (actionType.includes("BUY")) {
+          if (balanceRef.current < totalCost) {
+            console.log("[Smart Bot] Paused: Insufficient funds for buy order.");
+            return;
+          }
+          setBalance((prev) => prev - totalCost);
+        } else {
+          setBalance((prev) => prev + totalCost);
         }
 
-        setBalance((prev) => prev - totalCost);
-
-        const autoTrade: Trade = {
+        const smartTrade: Trade = {
           id: Date.now(),
           asset: coin.name,
-          action: "BUY (BOT)",
+          action: actionType,
           amount: amt,
           price: coin.current_price,
           total: totalCost,
         };
 
-        setTrades((prev) => [autoTrade, ...prev]);
+        setTrades((prev) => [smartTrade, ...prev]);
       }, intervalSeconds * 1000);
     }
 
@@ -164,7 +180,6 @@ export default function Home() {
     };
   }, [botStatus, botInterval]);
 
-  // Handle local simulation trades
   const handleTrade = (action: "BUY" | "SELL") => {
     const coin = tickers.find((c) => c.id === selectedCoin);
     if (!coin) return;
@@ -200,13 +215,25 @@ export default function Home() {
   };
 
   const saveBotConfig = () => {
-    alert("Bot strategy parameters saved locally!");
+    alert("Smart bot parameters successfully saved!");
   };
 
   const currentCoinObj = tickers.find((c) => c.id === selectedCoin);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 space-y-6">
+    <main 
+      className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 space-y-6 relative select-none"
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+    >
+      {/* Custom Interactive Cursor Follower */}
+      <div 
+        className="fixed pointer-events-none z-50 h-6 w-6 rounded-full border-2 border-emerald-400 bg-emerald-500/20 backdrop-blur-sm transition-transform duration-75 ease-out hidden md:block"
+        style={{
+          transform: `translate(${cursorPos.x - 12}px, ${cursorPos.y - 12}px)`,
+        }}
+      />
+
       {/* Top Navbar */}
       <nav className="border border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 rounded-xl flex justify-between items-center w-full">
         <div className="flex items-center space-x-3">
@@ -231,7 +258,7 @@ export default function Home() {
 
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
-            <h3 className="text-slate-400 text-sm font-medium">Algorithmic Trading Bot</h3>
+            <h3 className="text-slate-400 text-sm font-medium">Smart Algorithmic Bot</h3>
             <div className="flex items-center space-x-2 mt-1">
               <span className={`h-2.5 w-2.5 rounded-full ${botStatus === "RUNNING" ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`}></span>
               <p className="text-xl font-bold text-white">{botStatus}</p>
@@ -239,30 +266,30 @@ export default function Home() {
           </div>
           <button
             onClick={toggleBot}
-            className={`mt-4 w-full py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`mt-4 w-full py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer ${
               botStatus === "RUNNING"
                 ? "bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600/30"
                 : "bg-emerald-600 text-white hover:bg-emerald-500"
             }`}
           >
-            {botStatus === "RUNNING" ? "Stop Automated Bot" : "Start Automated Bot"}
+            {botStatus === "RUNNING" ? "Stop Smart Bot" : "Start Smart Bot"}
           </button>
         </div>
 
         {/* Bot Strategy Settings Panel */}
         <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-xl shadow-lg flex flex-col justify-between">
           <div>
-            <h3 className="text-slate-400 text-sm font-medium mb-2">Bot Strategy Settings</h3>
+            <h3 className="text-slate-400 text-sm font-medium mb-2">Smart Strategy Config</h3>
             <div className="space-y-2">
               <div>
                 <label className="text-[10px] text-slate-400 block mb-0.5">Target Asset</label>
                 <select
                   value={botAsset}
                   onChange={(e) => setBotAsset(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   {tickers.map((coin) => (
-                    <option key={coin.id} value={coin.name}>
+                    <option key={coin.id} value={coin.id}>
                       {coin.name}
                     </option>
                   ))}
@@ -293,7 +320,7 @@ export default function Home() {
           </div>
           <button
             onClick={saveBotConfig}
-            className="mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 rounded-lg text-xs font-semibold transition-colors"
+            className="mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] cursor-pointer"
           >
             Save Parameters
           </button>
@@ -351,7 +378,7 @@ export default function Home() {
                 <select
                   value={selectedCoin}
                   onChange={(e) => setSelectedCoin(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   {tickers.map((coin) => (
                     <option key={coin.id} value={coin.id}>
@@ -373,10 +400,10 @@ export default function Home() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 mt-6">
-            <button onClick={() => handleTrade("BUY")} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg">
+            <button onClick={() => handleTrade("BUY")} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition-all hover:scale-105 active:scale-95 cursor-pointer">
               Buy / Long
             </button>
-            <button onClick={() => handleTrade("SELL")} className="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-lg">
+            <button onClick={() => handleTrade("SELL")} className="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 rounded-lg transition-all hover:scale-105 active:scale-95 cursor-pointer">
               Sell / Short
             </button>
           </div>
