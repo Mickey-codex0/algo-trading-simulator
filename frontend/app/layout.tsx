@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Algo Trading Simulator",
+  title: "Algorithm Trading Simulator",
   description: "Real-Time Cryptocurrency and Stock Algorithmic Trading Platform",
 };
 
